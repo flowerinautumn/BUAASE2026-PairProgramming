@@ -146,7 +146,7 @@ function makeRoundState(startPlayer) {
 }
 
 function isRoundFinished(roundState) {
-  return roundState.normalActionCount[0] === 4 && roundState.normalActionCount[1] === 4;
+  return roundState.normalActionCount[0] === 4 && roundState.normalActionCount[1] === 4 && !roundState.pendingOffer;
 }
 
 function resolveRound(gameState, roundState) {
