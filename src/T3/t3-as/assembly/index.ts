@@ -275,43 +275,107 @@ function strategyGift(hand: Int8Array, importance: Float64Array): string {
   return "3" + sortString(result);
 }
 
-// Action 4 (竞争/Compete): Split 4 cards into 2 groups of 2, opponent picks a group
-// Strategy: create two groups of roughly equal strategic value, so opponent can't get
-//   a clearly better deal. Use the 4 least important cards and balance them.
+// Action 4 (竞争/Compete): Split 4 cards into 2 groups of 2, opponent picks a group.
+// Minimax strategy: enumerate all C(hand,4) four-card candidates (≤35) and for each
+// try all 3 possible 2-2 splits. Assume opponent takes the higher-value group (worst
+// case for us). Score = value of the group we keep, penalizing splits that hand the
+// opponent a single high-importance card.
 function strategyCompete(hand: Int8Array, importance: Float64Array): string {
-  const sorted = sortedCardIndicesByScore(hand, importance, true); // ascending importance
-  if (sorted.length < 4) {
-    // Fallback: use whatever we have
+  // Build flat list of card indices from hand (one entry per copy)
+  const pool: i32[] = [];
+  for (let i = 0; i < 7; i++) {
+    for (let j: i32 = 0; j < i32(hand[i]); j++) {
+      pool.push(i);
+    }
+  }
+
+  // Fallback: not enough cards
+  if (pool.length < 4) {
     let result = "";
-    for (let i = 0; i < sorted.length; i++) result += String.fromCharCode(65 + sorted[i]);
+    for (let i = 0; i < pool.length; i++) result += String.fromCharCode(65 + pool[i]);
     return "4" + sortString(result);
   }
 
-  // Take the 4 least important cards
-  const four: i32[] = [sorted[0], sorted[1], sorted[2], sorted[3]];
+  let bestScore: f64 = -999999.0;
+  let bestG1a: i32 = pool[0];
+  let bestG1b: i32 = pool[1];
+  let bestG2a: i32 = pool[2];
+  let bestG2b: i32 = pool[3];
 
-  // Simple insertion sort by importance (no closures in AS)
-  for (let i = 1; i < 4; i++) {
-    const key = four[i];
-    const keyVal = importance[key];
-    let j = i - 1;
-    while (j >= 0 && importance[four[j]] > keyVal) {
-      four[j + 1] = four[j];
-      j--;
+  const pLen: i32 = pool.length;
+
+  // Enumerate all C(pLen, 4) four-card candidates
+  for (let a = 0; a < pLen - 3; a++) {
+    for (let b = a + 1; b < pLen - 2; b++) {
+      for (let c = b + 1; c < pLen - 1; c++) {
+        for (let d = c + 1; d < pLen; d++) {
+          const c0 = pool[a]; const c1 = pool[b];
+          const c2 = pool[c]; const c3 = pool[d];
+          const i0 = importance[c0]; const i1 = importance[c1];
+          const i2 = importance[c2]; const i3 = importance[c3];
+
+          // Try all 3 splits. For each:
+          //   mySum  = importance of group we keep (opponent takes higher-sum group)
+          //   oppMax = max single-card importance in opponent's group
+          //   score  = mySum - 0.25 * oppMax (penalize handing opponent a key card)
+
+          let sum1: f64; let sum2: f64;
+          let mySum: f64; let oppMax: f64;
+          let g1a: i32; let g1b: i32; let g2a: i32; let g2b: i32;
+          let score: f64;
+
+          // Split 0: {c0,c1} vs {c2,c3}
+          sum1 = i0 + i1; sum2 = i2 + i3;
+          if (sum1 <= sum2) {
+            mySum = sum1; oppMax = i2 > i3 ? i2 : i3;
+            g1a = c0; g1b = c1; g2a = c2; g2b = c3;
+          } else {
+            mySum = sum2; oppMax = i0 > i1 ? i0 : i1;
+            g1a = c2; g1b = c3; g2a = c0; g2b = c1;
+          }
+          score = mySum - 0.25 * oppMax;
+          if (score > bestScore) {
+            bestScore = score;
+            bestG1a = g1a; bestG1b = g1b; bestG2a = g2a; bestG2b = g2b;
+          }
+
+          // Split 1: {c0,c2} vs {c1,c3}
+          sum1 = i0 + i2; sum2 = i1 + i3;
+          if (sum1 <= sum2) {
+            mySum = sum1; oppMax = i1 > i3 ? i1 : i3;
+            g1a = c0; g1b = c2; g2a = c1; g2b = c3;
+          } else {
+            mySum = sum2; oppMax = i0 > i2 ? i0 : i2;
+            g1a = c1; g1b = c3; g2a = c0; g2b = c2;
+          }
+          score = mySum - 0.25 * oppMax;
+          if (score > bestScore) {
+            bestScore = score;
+            bestG1a = g1a; bestG1b = g1b; bestG2a = g2a; bestG2b = g2b;
+          }
+
+          // Split 2: {c0,c3} vs {c1,c2}
+          sum1 = i0 + i3; sum2 = i1 + i2;
+          if (sum1 <= sum2) {
+            mySum = sum1; oppMax = i1 > i2 ? i1 : i2;
+            g1a = c0; g1b = c3; g2a = c1; g2b = c2;
+          } else {
+            mySum = sum2; oppMax = i0 > i3 ? i0 : i3;
+            g1a = c1; g1b = c2; g2a = c0; g2b = c3;
+          }
+          score = mySum - 0.25 * oppMax;
+          if (score > bestScore) {
+            bestScore = score;
+            bestG1a = g1a; bestG1b = g1b; bestG2a = g2a; bestG2b = g2b;
+          }
+        }
+      }
     }
-    four[j + 1] = key;
   }
 
-  // Group1: min + max importance; Group2: mid1 + mid2
-  // This balances value across groups
-  const g1a = four[0];
-  const g1b = four[3];
-  const g2a = four[1];
-  const g2b = four[2];
-
-  const group1 = sortString(String.fromCharCode(65 + g1a) + String.fromCharCode(65 + g1b));
-  const group2 = sortString(String.fromCharCode(65 + g2a) + String.fromCharCode(65 + g2b));
-
+  // Output: "4" + group1(2 sorted chars) + group2(2 sorted chars)
+  const group1 = sortString(String.fromCharCode(65 + bestG1a) + String.fromCharCode(65 + bestG1b));
+  const group2 = sortString(String.fromCharCode(65 + bestG2a) + String.fromCharCode(65 + bestG2b));
   return "4" + group1 + group2;
 }
 
