@@ -210,12 +210,69 @@ function strategyDiscard(hand: Int8Array, importance: Float64Array): string {
 }
 
 // Action 3 (赠予/Gift): Offer 3 cards to opponent (they pick 1, we keep 2)
-// Strategy: construct a "lose-lose" offer — offer cards where:
-//   - The best card among the 3 is still not great for opponent
-//   - We'd be happy keeping any 2 of the 3
-// Implementation: offer the 3 least important cards. Opponent picks the best of bad options.
+// Minimax strategy: enumerate all 3-card subsets from hand (at most C(7,3)=35).
+// For each candidate offer, assume opponent picks the card with highest importance
+// (worst case for us). Evaluate by the importance sum of the 2 cards we keep.
+// Choose the offer that maximizes our worst-case retained value.
 function strategyGift(hand: Int8Array, importance: Float64Array): string {
-  return "3" + pickLeastImportantN(hand, importance, 3);
+  // Build flat list of card indices from hand (one entry per copy)
+  const pool: i32[] = [];
+  for (let i = 0; i < 7; i++) {
+    for (let j: i32 = 0; j < i32(hand[i]); j++) {
+      pool.push(i);
+    }
+  }
+
+  // Fallback: not enough cards for meaningful enumeration
+  if (pool.length <= 3) {
+    let result = "";
+    for (let i = 0; i < pool.length; i++) result += String.fromCharCode(65 + pool[i]);
+    return "3" + sortString(result);
+  }
+
+  let bestScore: f64 = -999999.0;
+  let bestA: i32 = 0;
+  let bestB: i32 = 1;
+  let bestC: i32 = 2;
+
+  // Enumerate all C(pool.length, 3) combinations via triple loop
+  const pLen: i32 = pool.length;
+  for (let a = 0; a < pLen - 2; a++) {
+    for (let b = a + 1; b < pLen - 1; b++) {
+      for (let c = b + 1; c < pLen; c++) {
+        const c0 = pool[a];
+        const c1 = pool[b];
+        const c2 = pool[c];
+
+        // Opponent picks the card with highest importance (worst case for us)
+        const imp0 = importance[c0];
+        const imp1 = importance[c1];
+        const imp2 = importance[c2];
+
+        // We keep the other 2; compute retained importance for each opponent choice
+        const retain0 = imp1 + imp2; // opponent takes c0, we keep c1+c2
+        const retain1 = imp0 + imp2; // opponent takes c1, we keep c0+c2
+        const retain2 = imp0 + imp1; // opponent takes c2, we keep c0+c1
+
+        // Worst case: opponent picks the one that minimizes our retained value
+        let worstCase = retain0;
+        if (retain1 < worstCase) worstCase = retain1;
+        if (retain2 < worstCase) worstCase = retain2;
+
+        if (worstCase > bestScore) {
+          bestScore = worstCase;
+          bestA = a;
+          bestB = b;
+          bestC = c;
+        }
+      }
+    }
+  }
+
+  const result = String.fromCharCode(65 + pool[bestA])
+    + String.fromCharCode(65 + pool[bestB])
+    + String.fromCharCode(65 + pool[bestC]);
+  return "3" + sortString(result);
 }
 
 // Action 4 (竞争/Compete): Split 4 cards into 2 groups of 2, opponent picks a group
