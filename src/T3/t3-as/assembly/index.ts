@@ -64,26 +64,78 @@ function firstAvailableCards(cardCounts: Int8Array, k: i32): string {
   return result;
 }
 
+// Hanamikoji point value for a card at index i
+function cardScore(idx: i32): i32 {
+  if (idx <= 2) return 2;  // A, B, C
+  if (idx <= 4) return 3;  // D, E
+  if (idx == 5) return 4;  // F
+  return 5;                // G
+}
+
+// Pick 1 highest-value card; scan G→A
+function pickHighest1(cardCounts: Int8Array): string {
+  for (let i = 6; i >= 0; i--) {
+    if (cardCounts[i] > 0) return String.fromCharCode(65 + i);
+  }
+  return "";
+}
+
+// Pick n lowest-value cards; scan A→G (result ascending by construction)
+function pickLowestN(cardCounts: Int8Array, n: i32): string {
+  let result = "";
+  let remaining = n;
+  for (let i = 0; i < 7 && remaining > 0; i++) {
+    const take = cardCounts[i] < remaining ? cardCounts[i] : remaining;
+    for (let j = 0; j < take; j++) result += String.fromCharCode(65 + i);
+    remaining -= take;
+  }
+  return result;
+}
+
+// Pick 4 cards for 竞争 and arrange as group1(min+max) ++ group2(mid1+mid2).
+// Picks the 4 lowest-value cards from hand; s is sorted ascending.
+function pickCompete4(cardCounts: Int8Array): string {
+  const s = pickLowestN(cardCounts, 4);
+  if (s.length < 4) return s;
+  // s: [min, mid1, mid2, max] → group1 = min+max, group2 = mid1+mid2
+  return s.charAt(0) + s.charAt(3) + s.charAt(1) + s.charAt(2);
+}
+
+// Pick the lowest-value card from an offered string (response to 赠予)
+function pickLowestFromOffered(offered: string): string {
+  let bestIdx = 7;
+  for (let i = 0; i < offered.length; i++) {
+    const idx = cardIndex(offered.charAt(i));
+    if (idx < bestIdx) bestIdx = idx;
+  }
+  return bestIdx < 7 ? String.fromCharCode(65 + bestIdx) : offered.charAt(0);
+}
+
+// Total point value of a card-group string
+function groupScore(group: string): i32 {
+  let s = 0;
+  for (let i = 0; i < group.length; i++) s += cardScore(cardIndex(group.charAt(i)));
+  return s;
+}
+
 // Decide and return one legal action string for the current call.
-// Responds with a selection when the opponent just offered (赠予/竞争),
-// otherwise plays one of the four available action types in order 1→2→3→4.
 export function hanamikoji_action(history: string, cards: string, board: Int8Array): string {
   // --- Response turn: opponent just played 3 or 4 without a selection yet ---
   if (isResponseTurn(history)) {
     const tokens = splitHistoryTokens(history);
     const last = tokens[tokens.length - 1];
     if (last.charAt(0) == '3') {
-      // 赠予: pick the first offered card (chars 1..3)
-      return "-" + last.charAt(1);
+      // 赠予: pick the lowest-value card from the 3 offered
+      return "-" + pickLowestFromOffered(last.substring(1));
     } else {
-      // 竞争: pick group1 = chars 1..2
-      return "-" + last.substring(1, 3);
+      // 竞争: pick the group with the lower total value
+      const group1 = last.substring(1, 3);
+      const group2 = last.substring(3, 5);
+      return "-" + (groupScore(group1) <= groupScore(group2) ? group1 : group2);
     }
   }
 
-  // --- Action turn: determine my role (P1 or P2) ---
-  // Token count n is the index of the new token I'm about to place.
-  // Even n → P1 acts; odd n → P2 acts.
+  // --- Action turn ---
   const tokens = splitHistoryTokens(history);
   const n: i32 = tokens.length;
   const isP1: bool = (n % 2) == 0;
@@ -91,26 +143,25 @@ export function hanamikoji_action(history: string, cards: string, board: Int8Arr
   const mask: i32 = usedActionMask(history, isP1);
   const hand: Int8Array = countCards(cards);
 
-  // Try actions 1→2→3→4 in order; pick the first unused one the hand can afford.
   for (let action: i32 = 1; action <= 4; action++) {
-    const bit: i32 = 1 << (action - 1); // action 1→bit1, 2→bit2, 3→bit4, 4→bit8
-    if (mask & bit) continue;           // already used this round
-    if (cards.length < action) continue; // not enough cards (shouldn't happen in valid game)
-
-    const picked = firstAvailableCards(hand, action);
+    const bit: i32 = 1 << (action - 1);
+    if (mask & bit) continue;
+    if (cards.length < action) continue;
 
     if (action == 1) {
-      return "1" + picked;          // 密约: 1 card
+      // 密约: keep the highest-value card for ourselves
+      return "1" + pickHighest1(hand);
     } else if (action == 2) {
-      return "2" + picked;          // 取舍: 2 cards discarded
+      // 取舍: discard the two lowest-value cards
+      return "2" + pickLowestN(hand, 2);
     } else if (action == 3) {
-      return "3" + picked;          // 赠予: offer 3 cards
+      // 赠予: offer the three lowest-value cards (sorted ascending)
+      return "3" + pickLowestN(hand, 3);
     } else {
-      // 竞争: 4 cards, first 2 = group1, next 2 = group2
-      return "4" + picked;
+      // 竞争: group1 = min+max, group2 = mid1+mid2
+      return "4" + pickCompete4(hand);
     }
   }
 
-  // Fallback (should never be reached in a valid game state)
   return "1" + cards.charAt(0);
 }
