@@ -723,15 +723,54 @@ function evaluatePosition(myPlaced: Int8Array, oppPlaced: Int8Array, board: Int8
   return score;
 }
 
+// Evaluate position with hand-reachability adjustment.
+// Accounts for whether we still hold cards to reinforce contested geishas.
+function evaluatePositionWithReachability(myPlaced: Int8Array, oppPlaced: Int8Array, board: Int8Array, myHand: Int8Array): f64 {
+  let score = evaluatePosition(myPlaced, oppPlaced, board);
+  for (let i = 0; i < 7; i++) {
+    const pts: f64 = f64(cardScore(i));
+    const my: i32 = i32(myPlaced[i]);
+    const opp: i32 = i32(oppPlaced[i]);
+    const total: i32 = totalCardsForGeisha(i);
+    let rem: i32 = total - my - opp;
+    if (rem < 0) rem = 0;
+    if (rem == 0) continue; // outcome locked, no adjustment
+    const margin: i32 = my - opp;
+    const myCards: i32 = i32(myHand[i]);
+    const bv: i32 = i32(board[i]);
+
+    if (myCards == 0) {
+      // Can't contribute more — penalize if outcome is still contested
+      if (margin <= 0 && bv <= 0) {
+        score -= pts * 0.12; // behind/tied with no cards to catch up
+      } else if (margin > 0 && margin <= rem) {
+        score -= pts * 0.06; // ahead but can't defend the lead
+      }
+    } else if (margin <= 0 && bv <= 0) {
+      // Behind but we have cards to catch up — slight boost
+      score += f64(myCards) * pts * 0.04;
+    }
+  }
+  return score;
+}
+
 // Score a candidate action by simulating its effect on the board position.
 // For actions 3/4, evaluates the worst-case opponent choice.
-function scoreAction(action: string, roundCounts: Int8Array, board: Int8Array): f64 {
+function scoreAction(action: string, roundCounts: Int8Array, board: Int8Array, hand: Int8Array): f64 {
   // Baseline: current placed counts
   const baseMy = new Int8Array(7);
   const baseOpp = new Int8Array(7);
   for (let i = 0; i < 7; i++) {
     baseMy[i] = roundCounts[i];
     baseOpp[i] = roundCounts[7 + i];
+  }
+
+  // Compute remaining hand after this action (cards not consumed by this action)
+  const remainingHand = new Int8Array(7);
+  for (let i = 0; i < 7; i++) remainingHand[i] = hand[i];
+  for (let k = 1; k < action.length; k++) {
+    const ci = cardIndex(action.charAt(k));
+    if (ci >= 0 && ci < 7 && remainingHand[ci] > 0) remainingHand[ci]--;
   }
 
   const type = action.charAt(0);
@@ -741,12 +780,37 @@ function scoreAction(action: string, roundCounts: Int8Array, board: Int8Array): 
     const simMy = new Int8Array(7);
     for (let i = 0; i < 7; i++) simMy[i] = baseMy[i];
     simMy[cardIndex(action.charAt(1))]++;
-    return evaluatePosition(simMy, baseOpp, board);
+    return evaluatePositionWithReachability(simMy, baseOpp, board, remainingHand);
   }
 
   if (type == '2') {
-    // Discard: no placement — position unchanged
-    return evaluatePosition(baseMy, baseOpp, board);
+    // Discard: position unchanged, but we lose future potential from these cards
+    let penalty: f64 = 0.0;
+    for (let k = 1; k < action.length; k++) {
+      const idx = cardIndex(action.charAt(k));
+      const pts: f64 = f64(cardScore(idx));
+      const my: i32 = i32(baseMy[idx]);
+      const opp: i32 = i32(baseOpp[idx]);
+      const total: i32 = totalCardsForGeisha(idx);
+      let rem: i32 = total - my - opp;
+      if (rem < 0) rem = 0;
+      const margin: i32 = my - opp;
+      const bv: i32 = i32(board[idx]);
+
+      if (margin > rem) {
+        // Already locked win — discarding is free, no penalty
+      } else if (margin <= 0 && bv <= 0) {
+        // Behind or tied on opponent's geisha — hurts catch-up potential
+        penalty += pts * 0.25;
+      } else if (margin <= 0 && bv > 0) {
+        // Behind but we hold the marker — moderate penalty
+        penalty += pts * 0.15;
+      } else if (margin > 0 && margin <= rem) {
+        // Ahead but not locked — weakens defense
+        penalty += pts * 0.12;
+      }
+    }
+    return evaluatePositionWithReachability(baseMy, baseOpp, board, remainingHand) - penalty;
   }
 
   if (type == '3') {
@@ -757,13 +821,11 @@ function scoreAction(action: string, roundCounts: Int8Array, board: Int8Array): 
       const simMy = new Int8Array(7);
       const simOpp = new Int8Array(7);
       for (let i = 0; i < 7; i++) { simMy[i] = baseMy[i]; simOpp[i] = baseOpp[i]; }
-      // Opponent picks one card
       simOpp[cardIndex(offered.charAt(pick))]++;
-      // I keep the other two
       for (let k = 0; k < offered.length; k++) {
         if (k != pick) simMy[cardIndex(offered.charAt(k))]++;
       }
-      const s = evaluatePosition(simMy, simOpp, board);
+      const s = evaluatePositionWithReachability(simMy, simOpp, board, remainingHand);
       if (s < worstScore) worstScore = s;
     }
     return worstScore;
@@ -775,19 +837,17 @@ function scoreAction(action: string, roundCounts: Int8Array, board: Int8Array): 
   const g2a = cardIndex(action.charAt(3));
   const g2b = cardIndex(action.charAt(4));
 
-  // Opponent takes group1, I get group2
   const simMy1 = new Int8Array(7); const simOpp1 = new Int8Array(7);
   for (let i = 0; i < 7; i++) { simMy1[i] = baseMy[i]; simOpp1[i] = baseOpp[i]; }
   simOpp1[g1a]++; simOpp1[g1b]++;
   simMy1[g2a]++; simMy1[g2b]++;
-  const s1 = evaluatePosition(simMy1, simOpp1, board);
+  const s1 = evaluatePositionWithReachability(simMy1, simOpp1, board, remainingHand);
 
-  // Opponent takes group2, I get group1
   const simMy2 = new Int8Array(7); const simOpp2 = new Int8Array(7);
   for (let i = 0; i < 7; i++) { simMy2[i] = baseMy[i]; simOpp2[i] = baseOpp[i]; }
   simOpp2[g2a]++; simOpp2[g2b]++;
   simMy2[g1a]++; simMy2[g1b]++;
-  const s2 = evaluatePosition(simMy2, simOpp2, board);
+  const s2 = evaluatePositionWithReachability(simMy2, simOpp2, board, remainingHand);
 
   return s1 < s2 ? s1 : s2;
 }
@@ -894,7 +954,7 @@ export function hanamikoji_action(history: string, cards: string, board: Int8Arr
   let bestTie: f64 = -999999.0;
   for (let i = 0; i < legalActions.length; i++) {
     const action = legalActions[i];
-    const score = scoreAction(action, roundCounts, board);
+    const score = scoreAction(action, roundCounts, board, hand);
     const tie = importanceTieBreak(action, importance);
     if (score > bestScore || (score == bestScore && tie > bestTie)) {
       bestScore = score;
