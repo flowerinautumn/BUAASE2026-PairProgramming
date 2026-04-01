@@ -720,6 +720,65 @@ function evaluatePosition(myPlaced: Int8Array, oppPlaced: Int8Array, board: Int8
       else if (bv < 0) score -= pts * 0.15;
     }
   }
+
+  // ─── Global threshold adjustment (lightweight, continuous) ────────────────
+  // Win condition: ≥4 geisha markers OR ≥11 points.
+  // Accumulate soft win probability per geisha, then apply small continuous bonus.
+  let myProb: f64 = 0.0;   // soft count of geishas I'm likely to hold
+  let oppProb: f64 = 0.0;
+  let myPtsProb: f64 = 0.0;  // soft expected points
+  let oppPtsProb: f64 = 0.0;
+  for (let i = 0; i < 7; i++) {
+    const pts2: f64 = f64(cardScore(i));
+    const my2: i32 = i32(myPlaced[i]);
+    const opp2: i32 = i32(oppPlaced[i]);
+    const total2: i32 = totalCardsForGeisha(i);
+    const bv2: i32 = i32(board[i]);
+    let rem2: i32 = total2 - my2 - opp2;
+    if (rem2 < 0) rem2 = 0;
+    const margin2: i32 = my2 - opp2;
+
+    // Only locked (margin > remaining) counts as 1.0
+    if (margin2 > rem2) {
+      myProb += 1.0;
+      myPtsProb += pts2;
+    } else if (-margin2 > rem2) {
+      oppProb += 1.0;
+      oppPtsProb += pts2;
+    } else if (rem2 == 0 && margin2 == 0 && my2 > 0) {
+      // Tied and locked — marker holder keeps
+      if (bv2 > 0) { myProb += 1.0; myPtsProb += pts2; }
+      else if (bv2 < 0) { oppProb += 1.0; oppPtsProb += pts2; }
+    }
+    // Non-locked positions: no contribution to global counts
+    // (their value is already captured in the per-geisha score above)
+  }
+
+  // Small continuous bonus based on proximity to win thresholds
+  // Geisha count: gentle ramp as we approach 4
+  if (myProb >= 4.0) {
+    score += 1.5;
+  } else if (myProb >= 3.0) {
+    score += (myProb - 2.0) * 0.4; // 3.0→0.4
+  }
+  if (oppProb >= 4.0) {
+    score -= 1.5;
+  } else if (oppProb >= 3.0) {
+    score -= (oppProb - 2.0) * 0.4;
+  }
+
+  // Point total: gentle ramp as we approach 11
+  if (myPtsProb >= 11.0) {
+    score += 1.2;
+  } else if (myPtsProb >= 8.0) {
+    score += (myPtsProb - 8.0) * 0.15; // 8→0, 9→0.15, 10→0.3
+  }
+  if (oppPtsProb >= 11.0) {
+    score -= 1.2;
+  } else if (oppPtsProb >= 8.0) {
+    score -= (oppPtsProb - 8.0) * 0.15;
+  }
+
   return score;
 }
 
