@@ -109,11 +109,6 @@ function computeGeishaImportance(board: Int8Array, hand: Int8Array, roundCounts:
   return importance;
 }
 
-// Evaluate a single card's strategic value based on geisha importance
-function cardStrategicValue(idx: i32, importance: Float64Array): f64 {
-  return importance[idx];
-}
-
 // ─── Opponent Inference ─────────────────────────────────────────────────────
 
 // Track which cards the opponent has publicly played (visible in history).
@@ -257,56 +252,6 @@ function extractRoundCardCounts(history: string, isP1: bool): Int8Array {
   return counts;
 }
 
-// ─── Card Selection Helpers ─────────────────────────────────────────────────
-
-// Sort card indices by a score array (ascending). Returns sorted indices of cards in hand.
-function sortedCardIndicesByScore(hand: Int8Array, scores: Float64Array, ascending: bool): i32[] {
-  // Build flat list of card indices (one entry per card copy)
-  const indices: i32[] = [];
-  for (let i = 0; i < 7; i++) {
-    for (let j: i32 = 0; j < i32(hand[i]); j++) {
-      indices.push(i);
-    }
-  }
-  // Simple insertion sort by score
-  for (let i = 1; i < indices.length; i++) {
-    const key = indices[i];
-    let j = i - 1;
-    while (j >= 0) {
-      const cmp = scores[indices[j]] - scores[key];
-      const shouldSwap = ascending ? cmp > 0.0 : cmp < 0.0;
-      if (!shouldSwap) break;
-      indices[j + 1] = indices[j];
-      j--;
-    }
-    indices[j + 1] = key;
-  }
-  return indices;
-}
-
-// Pick n cards with lowest strategic value
-function pickLeastImportantN(hand: Int8Array, importance: Float64Array, n: i32): string {
-  const sorted = sortedCardIndicesByScore(hand, importance, true); // ascending = least important first
-  let result = "";
-  const count = n < sorted.length ? n : sorted.length;
-  for (let i = 0; i < count; i++) {
-    result += String.fromCharCode(65 + sorted[i]);
-  }
-  // Sort alphabetically for consistent output
-  return sortString(result);
-}
-
-// Pick n cards with highest strategic value
-function pickMostImportantN(hand: Int8Array, importance: Float64Array, n: i32): string {
-  const sorted = sortedCardIndicesByScore(hand, importance, false); // descending = most important first
-  let result = "";
-  const count = n < sorted.length ? n : sorted.length;
-  for (let i = 0; i < count; i++) {
-    result += String.fromCharCode(65 + sorted[i]);
-  }
-  return sortString(result);
-}
-
 // Sort a string's characters alphabetically
 function sortString(s: string): string {
   const arr: i32[] = [];
@@ -418,195 +363,11 @@ function importanceTieBreak(action: string, importance: Float64Array): f64 {
   return sum1 < sum2 ? sum1 : sum2;
 }
 
-// ─── Action Strategies ──────────────────────────────────────────────────────
-
-// Action 1 (密约/Secret): Hide 1 card — pick the most strategically valuable card
-// Rationale: this card is guaranteed to count for us, so save the most important one
-function strategySecret(hand: Int8Array, importance: Float64Array): string {
-  return "1" + pickMostImportantN(hand, importance, 1);
-}
-
-// Action 2 (取舍/Discard): Remove 2 cards — discard the least important cards
-// Rationale: minimize loss by removing cards that don't help the current board situation
-function strategyDiscard(hand: Int8Array, importance: Float64Array): string {
-  return "2" + pickLeastImportantN(hand, importance, 2);
-}
-
-// Action 3 (赠予/Gift): Offer 3 cards to opponent (they pick 1, we keep 2)
-// Minimax strategy: enumerate all 3-card subsets from hand (at most C(7,3)=35).
-// For each candidate offer, assume opponent picks the card with highest importance
-// (worst case for us). Evaluate by the importance sum of the 2 cards we keep.
-// Choose the offer that maximizes our worst-case retained value.
-function strategyGift(hand: Int8Array, importance: Float64Array): string {
-  // Build flat list of card indices from hand (one entry per copy)
-  const pool: i32[] = [];
-  for (let i = 0; i < 7; i++) {
-    for (let j: i32 = 0; j < i32(hand[i]); j++) {
-      pool.push(i);
-    }
-  }
-
-  // Fallback: not enough cards for meaningful enumeration
-  if (pool.length <= 3) {
-    let result = "";
-    for (let i = 0; i < pool.length; i++) result += String.fromCharCode(65 + pool[i]);
-    return "3" + sortString(result);
-  }
-
-  let bestScore: f64 = -999999.0;
-  let bestA: i32 = 0;
-  let bestB: i32 = 1;
-  let bestC: i32 = 2;
-
-  // Enumerate all C(pool.length, 3) combinations via triple loop
-  const pLen: i32 = pool.length;
-  for (let a = 0; a < pLen - 2; a++) {
-    for (let b = a + 1; b < pLen - 1; b++) {
-      for (let c = b + 1; c < pLen; c++) {
-        const c0 = pool[a];
-        const c1 = pool[b];
-        const c2 = pool[c];
-
-        // Opponent picks the card with highest importance (worst case for us)
-        const imp0 = importance[c0];
-        const imp1 = importance[c1];
-        const imp2 = importance[c2];
-
-        // We keep the other 2; compute retained importance for each opponent choice
-        const retain0 = imp1 + imp2; // opponent takes c0, we keep c1+c2
-        const retain1 = imp0 + imp2; // opponent takes c1, we keep c0+c2
-        const retain2 = imp0 + imp1; // opponent takes c2, we keep c0+c1
-
-        // Worst case: opponent picks the one that minimizes our retained value
-        let worstCase = retain0;
-        if (retain1 < worstCase) worstCase = retain1;
-        if (retain2 < worstCase) worstCase = retain2;
-
-        if (worstCase > bestScore) {
-          bestScore = worstCase;
-          bestA = a;
-          bestB = b;
-          bestC = c;
-        }
-      }
-    }
-  }
-
-  const result = String.fromCharCode(65 + pool[bestA])
-    + String.fromCharCode(65 + pool[bestB])
-    + String.fromCharCode(65 + pool[bestC]);
-  return "3" + sortString(result);
-}
-
-// Action 4 (竞争/Compete): Split 4 cards into 2 groups of 2, opponent picks a group.
-// Minimax strategy: enumerate all C(hand,4) four-card candidates (≤35) and for each
-// try all 3 possible 2-2 splits. Assume opponent takes the higher-value group (worst
-// case for us). Score = value of the group we keep, penalizing splits that hand the
-// opponent a single high-importance card.
-function strategyCompete(hand: Int8Array, importance: Float64Array): string {
-  // Build flat list of card indices from hand (one entry per copy)
-  const pool: i32[] = [];
-  for (let i = 0; i < 7; i++) {
-    for (let j: i32 = 0; j < i32(hand[i]); j++) {
-      pool.push(i);
-    }
-  }
-
-  // Fallback: not enough cards
-  if (pool.length < 4) {
-    let result = "";
-    for (let i = 0; i < pool.length; i++) result += String.fromCharCode(65 + pool[i]);
-    return "4" + sortString(result);
-  }
-
-  let bestScore: f64 = -999999.0;
-  let bestG1a: i32 = pool[0];
-  let bestG1b: i32 = pool[1];
-  let bestG2a: i32 = pool[2];
-  let bestG2b: i32 = pool[3];
-
-  const pLen: i32 = pool.length;
-
-  // Enumerate all C(pLen, 4) four-card candidates
-  for (let a = 0; a < pLen - 3; a++) {
-    for (let b = a + 1; b < pLen - 2; b++) {
-      for (let c = b + 1; c < pLen - 1; c++) {
-        for (let d = c + 1; d < pLen; d++) {
-          const c0 = pool[a]; const c1 = pool[b];
-          const c2 = pool[c]; const c3 = pool[d];
-          const i0 = importance[c0]; const i1 = importance[c1];
-          const i2 = importance[c2]; const i3 = importance[c3];
-
-          // Try all 3 splits. For each:
-          //   mySum  = importance of group we keep (opponent takes higher-sum group)
-          //   oppMax = max single-card importance in opponent's group
-          //   score  = mySum - 0.25 * oppMax (penalize handing opponent a key card)
-
-          let sum1: f64; let sum2: f64;
-          let mySum: f64; let oppMax: f64;
-          let g1a: i32; let g1b: i32; let g2a: i32; let g2b: i32;
-          let score: f64;
-
-          // Split 0: {c0,c1} vs {c2,c3}
-          sum1 = i0 + i1; sum2 = i2 + i3;
-          if (sum1 <= sum2) {
-            mySum = sum1; oppMax = i2 > i3 ? i2 : i3;
-            g1a = c0; g1b = c1; g2a = c2; g2b = c3;
-          } else {
-            mySum = sum2; oppMax = i0 > i1 ? i0 : i1;
-            g1a = c2; g1b = c3; g2a = c0; g2b = c1;
-          }
-          score = mySum - 0.25 * oppMax;
-          if (score > bestScore) {
-            bestScore = score;
-            bestG1a = g1a; bestG1b = g1b; bestG2a = g2a; bestG2b = g2b;
-          }
-
-          // Split 1: {c0,c2} vs {c1,c3}
-          sum1 = i0 + i2; sum2 = i1 + i3;
-          if (sum1 <= sum2) {
-            mySum = sum1; oppMax = i1 > i3 ? i1 : i3;
-            g1a = c0; g1b = c2; g2a = c1; g2b = c3;
-          } else {
-            mySum = sum2; oppMax = i0 > i2 ? i0 : i2;
-            g1a = c1; g1b = c3; g2a = c0; g2b = c2;
-          }
-          score = mySum - 0.25 * oppMax;
-          if (score > bestScore) {
-            bestScore = score;
-            bestG1a = g1a; bestG1b = g1b; bestG2a = g2a; bestG2b = g2b;
-          }
-
-          // Split 2: {c0,c3} vs {c1,c2}
-          sum1 = i0 + i3; sum2 = i1 + i2;
-          if (sum1 <= sum2) {
-            mySum = sum1; oppMax = i1 > i2 ? i1 : i2;
-            g1a = c0; g1b = c3; g2a = c1; g2b = c2;
-          } else {
-            mySum = sum2; oppMax = i0 > i3 ? i0 : i3;
-            g1a = c1; g1b = c2; g2a = c0; g2b = c3;
-          }
-          score = mySum - 0.25 * oppMax;
-          if (score > bestScore) {
-            bestScore = score;
-            bestG1a = g1a; bestG1b = g1b; bestG2a = g2a; bestG2b = g2b;
-          }
-        }
-      }
-    }
-  }
-
-  // Output: "4" + group1(2 sorted chars) + group2(2 sorted chars)
-  const group1 = sortString(String.fromCharCode(65 + bestG1a) + String.fromCharCode(65 + bestG1b));
-  const group2 = sortString(String.fromCharCode(65 + bestG2a) + String.fromCharCode(65 + bestG2b));
-  return "4" + group1 + group2;
-}
-
 // ─── Response Strategies ────────────────────────────────────────────────────
 
 // Response to 赠予 (action 3): opponent offers 3 cards, we pick 1.
 // Choose by simulated resulting position.
-function respondGift(offered: string, roundCounts: Int8Array, board: Int8Array, importance: Float64Array): string {
+function respondGift(offered: string, roundCounts: Int8Array, board: Int8Array, importance: Float64Array, hand: Int8Array): string {
   const baseMy = new Int8Array(7);
   const baseOpp = new Int8Array(7);
   for (let i = 0; i < 7; i++) {
@@ -631,7 +392,7 @@ function respondGift(offered: string, roundCounts: Int8Array, board: Int8Array, 
       if (k != i) simOpp[cardIndex(offered.charAt(k))]++;
     }
 
-    const score = evaluatePosition(simMy, simOpp, board);
+    const score = evaluatePositionWithReachability(simMy, simOpp, board, hand);
     const tie = importance[idx];
     if (score > bestScore || (score == bestScore && tie > bestTie)) {
       bestScore = score;
@@ -644,7 +405,7 @@ function respondGift(offered: string, roundCounts: Int8Array, board: Int8Array, 
 
 // Response to 竞争 (action 4): opponent offers 2 groups of 2, we pick one.
 // Choose by simulated resulting position.
-function respondCompete(group1: string, group2: string, roundCounts: Int8Array, board: Int8Array, importance: Float64Array): string {
+function respondCompete(group1: string, group2: string, roundCounts: Int8Array, board: Int8Array, importance: Float64Array, hand: Int8Array): string {
   const baseMy = new Int8Array(7);
   const baseOpp = new Int8Array(7);
   for (let i = 0; i < 7; i++) {
@@ -667,8 +428,8 @@ function respondCompete(group1: string, group2: string, roundCounts: Int8Array, 
   for (let i = 0; i < group2.length; i++) simMy2[cardIndex(group2.charAt(i))]++;
   for (let i = 0; i < group1.length; i++) simOpp2[cardIndex(group1.charAt(i))]++;
 
-  const score1 = evaluatePosition(simMy1, simOpp1, board);
-  const score2 = evaluatePosition(simMy2, simOpp2, board);
+  const score1 = evaluatePositionWithReachability(simMy1, simOpp1, board, hand);
+  const score2 = evaluatePositionWithReachability(simMy2, simOpp2, board, hand);
 
   let tie1: f64 = 0.0;
   let tie2: f64 = 0.0;
@@ -924,61 +685,6 @@ function scoreAction(action: string, roundCounts: Int8Array, board: Int8Array, h
   return s1 < s2 ? s1 : s2;
 }
 
-// ─── Action Priority ────────────────────────────────────────────────────────
-
-// Decide which action to use based on current game state.
-// Priority logic:
-//   - Early in round (more cards): prefer gift/compete (interactive, less loss)
-//   - Late in round (fewer cards): prefer secret/discard (targeted, decisive)
-//   - With strong hand (many high-importance cards): prefer secret (lock in value)
-//   - With weak hand: prefer discard (minimize damage)
-function chooseActionOrder(hand: Int8Array, importance: Float64Array, cardsLen: i32, mask: i32): i32[] {
-  // Count how many high-importance cards we have
-  let highImportanceCount: i32 = 0;
-  let totalImportance: f64 = 0.0;
-  for (let i = 0; i < 7; i++) {
-    if (hand[i] > 0) {
-      totalImportance += importance[i] * f64(hand[i]);
-      if (importance[i] > 3.0) highImportanceCount += i32(hand[i]);
-    }
-  }
-
-  const avgImportance: f64 = cardsLen > 0 ? totalImportance / f64(cardsLen) : 0.0;
-
-  // Build priority order based on situation
-  const order: i32[] = [];
-
-  if (cardsLen >= 6) {
-    // Early game: lots of cards — use interactive actions first
-    // Gift and Compete when we have many cards gives us more flexibility
-    if (highImportanceCount >= 2) {
-      // Strong hand: secret the best card first, then gift/compete with expendables
-      order.push(1); // secret — lock in our best card
-      order.push(3); // gift — offer least important 3
-      order.push(4); // compete — split least important 4
-      order.push(2); // discard — drop remaining low-value
-    } else {
-      // Weaker hand: discard weak cards early, save secret for later
-      order.push(2); // discard the weakest early
-      order.push(3); // gift — force opponent into bad choice
-      order.push(4); // compete
-      order.push(1); // secret last surviving card
-    }
-  } else if (cardsLen >= 4) {
-    // Mid game
-    if (avgImportance > 2.5) {
-      order.push(1); order.push(4); order.push(3); order.push(2);
-    } else {
-      order.push(2); order.push(4); order.push(3); order.push(1);
-    }
-  } else {
-    // Late game: few cards left, must use whatever action remains
-    order.push(1); order.push(2); order.push(3); order.push(4);
-  }
-
-  return order;
-}
-
 // ─── Main Entry Point ───────────────────────────────────────────────────────
 
 export function hanamikoji_action(history: string, cards: string, board: Int8Array): string {
@@ -1005,19 +711,19 @@ export function hanamikoji_action(history: string, cards: string, board: Int8Arr
     }
   }
 
-  // --- Response turn ---
+  // --- Response turn: respondGift/respondCompete → evaluatePositionWithReachability ---
   if (isResponseTurn(history)) {
     const last = tokens[tokens.length - 1];
     if (last.charAt(0) == '3') {
-      return respondGift(last.substring(1), roundCounts, board, importance);
+      return respondGift(last.substring(1), roundCounts, board, importance, hand);
     } else {
       const group1 = last.substring(1, 3);
       const group2 = last.substring(3, 5);
-      return respondCompete(group1, group2, roundCounts, board, importance);
+      return respondCompete(group1, group2, roundCounts, board, importance, hand);
     }
   }
 
-  // --- Action turn ---
+  // --- Action turn: enumerateLegalActions → scoreAction (evaluatePositionWithReachability) → pick best ---
   const mask: i32 = usedActionMask(history, isP1);
 
   const legalActions = enumerateLegalActions(hand, mask);
