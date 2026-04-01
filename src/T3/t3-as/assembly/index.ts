@@ -738,7 +738,7 @@ function evaluatePosition(myPlaced: Int8Array, oppPlaced: Int8Array, board: Int8
     if (rem2 < 0) rem2 = 0;
     const margin2: i32 = my2 - opp2;
 
-    // Only locked (margin > remaining) counts as 1.0
+    // Locked (margin > remaining) counts as 1.0
     if (margin2 > rem2) {
       myProb += 1.0;
       myPtsProb += pts2;
@@ -749,9 +749,22 @@ function evaluatePosition(myPlaced: Int8Array, oppPlaced: Int8Array, board: Int8
       // Tied and locked — marker holder keeps
       if (bv2 > 0) { myProb += 1.0; myPtsProb += pts2; }
       else if (bv2 < 0) { oppProb += 1.0; oppPtsProb += pts2; }
+    } else if (margin2 > 0 && rem2 > 0) {
+      // Non-locked lead: small soft contribution (capped well below 1.0)
+      const conf2: f64 = f64(margin2) / f64(margin2 + rem2);
+      const soft: f64 = conf2 * 0.3;
+      myProb += soft;
+      myPtsProb += pts2 * soft;
+    } else if (margin2 < 0 && rem2 > 0) {
+      const conf2: f64 = f64(-margin2) / f64(-margin2 + rem2);
+      const soft: f64 = conf2 * 0.3;
+      oppProb += soft;
+      oppPtsProb += pts2 * soft;
+    } else if (margin2 == 0 && my2 > 0 && rem2 > 0) {
+      // Tied, not locked, cards placed — marker holder gets tiny soft credit
+      if (bv2 > 0) { myProb += 0.1; myPtsProb += pts2 * 0.1; }
+      else if (bv2 < 0) { oppProb += 0.1; oppPtsProb += pts2 * 0.1; }
     }
-    // Non-locked positions: no contribution to global counts
-    // (their value is already captured in the per-geisha score above)
   }
 
   // Small continuous bonus based on proximity to win thresholds
