@@ -617,7 +617,8 @@ function scoreAction(action: string, roundCounts: Int8Array, board: Int8Array, h
   }
 
   if (type == '2') {
-    // Discard: position unchanged, but we lose future potential from these cards
+    // Discard: position unchanged, but we lose future potential from these cards.
+    // Dynamic penalty: duplicate discount, locked-lane awareness, tightness scaling.
     let penalty: f64 = 0.0;
     for (let k = 1; k < action.length; k++) {
       const idx = cardIndex(action.charAt(k));
@@ -630,18 +631,36 @@ function scoreAction(action: string, roundCounts: Int8Array, board: Int8Array, h
       const margin: i32 = my - opp;
       const bv: i32 = i32(board[idx]);
 
+      // Base penalty by situation
+      let basePen: f64 = 0.0;
       if (margin > rem) {
-        // Already locked win — discarding is free, no penalty
+        // Locked win — free to discard
+      } else if (-margin > rem) {
+        // Locked loss — discarding a lost cause is cheap
+        basePen = pts * 0.04;
       } else if (margin <= 0 && bv <= 0) {
-        // Behind or tied on opponent's geisha — hurts catch-up potential
-        penalty += pts * 0.25;
+        basePen = pts * 0.25;
       } else if (margin <= 0 && bv > 0) {
-        // Behind but we hold the marker — moderate penalty
-        penalty += pts * 0.15;
+        basePen = pts * 0.15;
       } else if (margin > 0 && margin <= rem) {
-        // Ahead but not locked — weakens defense
-        penalty += pts * 0.12;
+        basePen = pts * 0.12;
       }
+
+      // Duplicate discount: still have cards for this lane after discard
+      if (remainingHand[idx] > 0 && basePen > 0.0) {
+        const dupFactor: f64 = i32(remainingHand[idx]) >= 2 ? 0.4 : 0.65;
+        basePen *= dupFactor;
+      }
+
+      // Tightness scaling: tight race (small |margin|) keeps full penalty;
+      // larger gap reduces urgency slightly
+      if (rem > 0 && basePen > 0.0) {
+        const absMargin: i32 = margin >= 0 ? margin : -margin;
+        const tightness: f64 = 1.0 - f64(absMargin) * 0.12;
+        basePen *= tightness > 0.55 ? tightness : 0.55;
+      }
+
+      penalty += basePen;
     }
     return evaluatePositionWithReachability(baseMy, baseOpp, board, remainingHand) - penalty;
   }
