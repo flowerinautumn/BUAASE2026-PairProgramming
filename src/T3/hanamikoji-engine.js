@@ -332,6 +332,7 @@ function runSingleGame(players, maxDecisionMs, firstPlayer = 0, options = {}) {
     const roundState = makeRoundState(gameState.startPlayer);
 
     const deck = createInitialDeck();
+    if (options.shuffleDeck) options.shuffleDeck(deck);
     deck.pop();
 
     dealRoundCards(roundState, deck);
@@ -504,6 +505,8 @@ function runSingleGame(players, maxDecisionMs, firstPlayer = 0, options = {}) {
 export function runSingleMatch(players, maxDecisionMs) {
   return runSingleGame(players, maxDecisionMs, 0);
 }
+
+export { runSingleGame };
 
 export function formatWinnerLabel(players, winnerCode) {
   if (winnerCode === 1) return players[0].name;
