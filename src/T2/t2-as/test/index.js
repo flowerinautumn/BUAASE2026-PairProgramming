@@ -88,3 +88,44 @@ describe("calc_current_state action parsing edge cases", () => {
     assert.deepEqual(run(historyBA, board), run(historyAB, board));
   });
 });
+
+describe("calc_current_state minimal single-action isolation", () => {
+  it("changing only gift selection (3BCC-B vs 3BCC-C) changes only B/C distribution as expected", () => {
+    const historyPickB = "3BCC-B 1A 2DD 2EE 1F 1G 4DEFG-DE 4AAGG-AA";
+    const historyPickC = "3BCC-C 1A 2DD 2EE 1F 1G 4DEFG-DE 4AAGG-AA";
+    const board = [0, 0, 0, 0, 0, 0, 0];
+
+    const resultPickB = run(historyPickB, board);
+    const resultPickC = run(historyPickC, board);
+
+    // P1: picking C means P1 keeps BC instead of CC => B +1, C -1
+    assert.equal(resultPickC[0][1] - resultPickB[0][1], 1);
+    assert.equal(resultPickC[0][2] - resultPickB[0][2], -1);
+
+    // P2: symmetrical transfer => B -1, C +1
+    assert.equal(resultPickC[1][1] - resultPickB[1][1], -1);
+    assert.equal(resultPickC[1][2] - resultPickB[1][2], 1);
+  });
+
+  it("changing only compete selection (4DEFG-DE vs 4DEFG-FG) swaps DE/FG ownership as expected", () => {
+    const historyPickDE = "3BCC-C 1A 2DD 2EE 1F 1G 4DEFG-DE 4AAGG-AA";
+    const historyPickFG = "3BCC-C 1A 2DD 2EE 1F 1G 4DEFG-FG 4AAGG-AA";
+    const board = [0, 0, 0, 0, 0, 0, 0];
+
+    const resultPickDE = run(historyPickDE, board);
+    const resultPickFG = run(historyPickFG, board);
+
+    // When responder picks FG instead of DE:
+    // P1 gets DE (instead of FG) => D/E +1, F/G -1
+    assert.equal(resultPickFG[0][3] - resultPickDE[0][3], 1);
+    assert.equal(resultPickFG[0][4] - resultPickDE[0][4], 1);
+    assert.equal(resultPickFG[0][5] - resultPickDE[0][5], -1);
+    assert.equal(resultPickFG[0][6] - resultPickDE[0][6], -1);
+
+    // P2 is opposite => D/E -1, F/G +1
+    assert.equal(resultPickFG[1][3] - resultPickDE[1][3], -1);
+    assert.equal(resultPickFG[1][4] - resultPickDE[1][4], -1);
+    assert.equal(resultPickFG[1][5] - resultPickDE[1][5], 1);
+    assert.equal(resultPickFG[1][6] - resultPickDE[1][6], 1);
+  });
+});
