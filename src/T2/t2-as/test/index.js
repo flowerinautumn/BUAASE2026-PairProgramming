@@ -46,3 +46,45 @@ describe("calc_current_state tie and board carry-over", () => {
     assert.deepEqual(run(history, board), expected);
   });
 });
+
+describe("calc_current_state action parsing edge cases", () => {
+  it("handles action-3 when offered cards are all identical (3CCC-C)", () => {
+    const history = "3CCC-C 1A 2BD 2EF 1G 1F 4ABCD-AB 4EFGG-EF";
+    const board = [0, 0, 0, 0, 0, 0, 0];
+    const expected = [
+      [0, 0, 3, 1, 1, 1, 1],
+      [2, 1, 1, 0, 0, 1, 2],
+      [-1, -1, 1, 1, 1, 0, -1]
+    ];
+    assert.deepEqual(run(history, board), expected);
+  });
+
+  it("for action-3 with duplicates (3BCC-C), removes only one selected card", () => {
+    const history = "3BCC-C 1A 2BD 2EF 1G 1F 4ABCD-AB 4EFGG-EF";
+    const board = [0, 0, 0, 0, 0, 0, 0];
+    const expected = [
+      [0, 1, 2, 1, 1, 1, 1],
+      [2, 1, 1, 0, 0, 1, 2],
+      [-1, 0, 1, 1, 1, 0, -1]
+    ];
+    assert.deepEqual(run(history, board), expected);
+  });
+
+  it("for action-4, when selecting first group, actor receives second group", () => {
+    const history = "4ABCD-AB 1A 2BC 2DE 1F 1G 3EEE-E 3DDD-D";
+    const board = [0, 0, 0, 0, 0, 0, 0];
+    const expected = [
+      [0, 0, 1, 2, 2, 1, 0],
+      [2, 1, 0, 2, 1, 0, 1],
+      [-1, -1, 1, 0, 1, 1, -1]
+    ];
+    assert.deepEqual(run(history, board), expected);
+  });
+
+  it("for action-4 with same multiset written in different order (4ABCD-BA), still treats as first group", () => {
+    const historyAB = "4ABCD-AB 1A 2BC 2DE 1F 1G 3EEE-E 3DDD-D";
+    const historyBA = "4ABCD-BA 1A 2BC 2DE 1F 1G 3EEE-E 3DDD-D";
+    const board = [0, 0, 0, 0, 0, 0, 0];
+    assert.deepEqual(run(historyBA, board), run(historyAB, board));
+  });
+});
