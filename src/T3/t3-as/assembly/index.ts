@@ -367,7 +367,7 @@ function importanceTieBreak(action: string, importance: Float64Array): f64 {
 
 // Response to 赠予 (action 3): opponent offers 3 cards, we pick 1.
 // Choose by simulated resulting position.
-function respondGift(offered: string, roundCounts: Int8Array, board: Int8Array, importance: Float64Array, hand: Int8Array): string {
+function respondGift(offered: string, roundCounts: Int8Array, board: Int8Array, hand: Int8Array): string {
   const baseMy = new Int8Array(7);
   const baseOpp = new Int8Array(7);
   for (let i = 0; i < 7; i++) {
@@ -375,9 +375,8 @@ function respondGift(offered: string, roundCounts: Int8Array, board: Int8Array, 
     baseOpp[i] = roundCounts[7 + i];
   }
 
-  let bestIdx: i32 = -1;
+  let bestIdx: i32 = cardIndex(offered.charAt(0));
   let bestScore: f64 = -999999.0;
-  let bestTie: f64 = -999999.0;
   for (let i = 0; i < offered.length; i++) {
     const idx = cardIndex(offered.charAt(i));
     const simMy = new Int8Array(7);
@@ -393,19 +392,17 @@ function respondGift(offered: string, roundCounts: Int8Array, board: Int8Array, 
     }
 
     const score = evaluatePositionWithReachability(simMy, simOpp, board, hand);
-    const tie = importance[idx];
-    if (score > bestScore || (score == bestScore && tie > bestTie)) {
+    if (score > bestScore) {
       bestScore = score;
-      bestTie = tie;
       bestIdx = idx;
     }
   }
-  return "-" + (bestIdx >= 0 ? String.fromCharCode(65 + bestIdx) : offered.charAt(0));
+  return "-" + String.fromCharCode(65 + bestIdx);
 }
 
 // Response to 竞争 (action 4): opponent offers 2 groups of 2, we pick one.
 // Choose by simulated resulting position.
-function respondCompete(group1: string, group2: string, roundCounts: Int8Array, board: Int8Array, importance: Float64Array, hand: Int8Array): string {
+function respondCompete(group1: string, group2: string, roundCounts: Int8Array, board: Int8Array, hand: Int8Array): string {
   const baseMy = new Int8Array(7);
   const baseOpp = new Int8Array(7);
   for (let i = 0; i < 7; i++) {
@@ -431,158 +428,61 @@ function respondCompete(group1: string, group2: string, roundCounts: Int8Array, 
   const score1 = evaluatePositionWithReachability(simMy1, simOpp1, board, hand);
   const score2 = evaluatePositionWithReachability(simMy2, simOpp2, board, hand);
 
-  let tie1: f64 = 0.0;
-  let tie2: f64 = 0.0;
-  for (let i = 0; i < group1.length; i++) tie1 += importance[cardIndex(group1.charAt(i))];
-  for (let i = 0; i < group2.length; i++) tie2 += importance[cardIndex(group2.charAt(i))];
-
-  return "-" + (score1 > score2 || (score1 == score2 && tie1 >= tie2) ? group1 : group2);
+  return "-" + (score1 >= score2 ? group1 : group2);
 }
 
 // ─── Position Evaluation & Action Scoring ───────────────────────────────────
 
 // Evaluate a board position from placed card counts.
 // Returns a score from our perspective (positive = good for us).
-// Uses confidence-weighted margins: large leads on geishas with few remaining
-// cards score higher than narrow leads with many cards unplayed.
+// This mirrors the Rust opponent's style: score current marker ownership
+// directly, then apply very large bonuses for the actual win conditions.
 function evaluatePosition(myPlaced: Int8Array, oppPlaced: Int8Array, board: Int8Array): f64 {
-  let score: f64 = 0;
+  let myScore: i32 = 0;
+  let oppScore: i32 = 0;
+  let myMarkers: i32 = 0;
+  let oppMarkers: i32 = 0;
   for (let i = 0; i < 7; i++) {
-    const pts: f64 = f64(cardScore(i));
     const my: i32 = i32(myPlaced[i]);
     const opp: i32 = i32(oppPlaced[i]);
-    const total: i32 = totalCardsForGeisha(i);
     const bv: i32 = i32(board[i]);
-    let rem: i32 = total - my - opp;
-    if (rem < 0) rem = 0;
-    const margin: i32 = my - opp;
+    let winner: i32 = 0;
+    if (my > opp) winner = 1;
+    else if (opp > my) winner = -1;
+    else winner = bv;
 
-    if (margin > 0) {
-      if (margin > rem) {
-        // Guaranteed win: full credit, extra for flipping/claiming
-        score += bv <= 0 ? pts * 1.5 : pts * 1.0;
-      } else {
-        // Winning but not locked: confidence = margin / (margin + remaining)
-        const conf: f64 = f64(margin) / f64(margin + rem);
-        score += pts * conf * (bv <= 0 ? 1.3 : 1.0);
-      }
-    } else if (margin < 0) {
-      const absMargin: i32 = -margin;
-      if (absMargin > rem) {
-        // Guaranteed loss
-        score -= bv >= 0 ? pts * 1.5 : pts * 1.0;
-      } else {
-        const conf: f64 = f64(absMargin) / f64(absMargin + rem);
-        score -= pts * conf * (bv >= 0 ? 1.3 : 1.0);
-      }
-    } else if (my > 0) {
-      // Tied with cards placed: marker stays with previous holder
-      if (bv > 0) score += pts * 0.15;
-      else if (bv < 0) score -= pts * 0.15;
+    if (winner > 0) {
+      myScore += cardScore(i);
+      myMarkers++;
+    } else if (winner < 0) {
+      oppScore += cardScore(i);
+      oppMarkers++;
     }
   }
 
-  // ─── Global threshold adjustment (lightweight, continuous) ────────────────
-  // Win condition: ≥4 geisha markers OR ≥11 points.
-  // Accumulate soft win probability per geisha, then apply small continuous bonus.
-  let myProb: f64 = 0.0;   // soft count of geishas I'm likely to hold
-  let oppProb: f64 = 0.0;
-  let myPtsProb: f64 = 0.0;  // soft expected points
-  let oppPtsProb: f64 = 0.0;
-  for (let i = 0; i < 7; i++) {
-    const pts2: f64 = f64(cardScore(i));
-    const my2: i32 = i32(myPlaced[i]);
-    const opp2: i32 = i32(oppPlaced[i]);
-    const total2: i32 = totalCardsForGeisha(i);
-    const bv2: i32 = i32(board[i]);
-    let rem2: i32 = total2 - my2 - opp2;
-    if (rem2 < 0) rem2 = 0;
-    const margin2: i32 = my2 - opp2;
-
-    // Locked (margin > remaining) counts as 1.0
-    if (margin2 > rem2) {
-      myProb += 1.0;
-      myPtsProb += pts2;
-    } else if (-margin2 > rem2) {
-      oppProb += 1.0;
-      oppPtsProb += pts2;
-    } else if (rem2 == 0 && margin2 == 0 && my2 > 0) {
-      // Tied and locked — marker holder keeps
-      if (bv2 > 0) { myProb += 1.0; myPtsProb += pts2; }
-      else if (bv2 < 0) { oppProb += 1.0; oppPtsProb += pts2; }
-    } else if (margin2 > 0 && rem2 > 0) {
-      // Non-locked lead: small soft contribution (capped well below 1.0)
-      const conf2: f64 = f64(margin2) / f64(margin2 + rem2);
-      const soft: f64 = conf2 * 0.3;
-      myProb += soft;
-      myPtsProb += pts2 * soft;
-    } else if (margin2 < 0 && rem2 > 0) {
-      const conf2: f64 = f64(-margin2) / f64(-margin2 + rem2);
-      const soft: f64 = conf2 * 0.3;
-      oppProb += soft;
-      oppPtsProb += pts2 * soft;
-    } else if (margin2 == 0 && my2 > 0 && rem2 > 0) {
-      // Tied, not locked, cards placed — marker holder gets tiny soft credit
-      if (bv2 > 0) { myProb += 0.1; myPtsProb += pts2 * 0.1; }
-      else if (bv2 < 0) { oppProb += 0.1; oppPtsProb += pts2 * 0.1; }
-    }
-  }
-
-  // Small continuous bonus based on proximity to win thresholds
-  // Geisha count: gentle ramp as we approach 4
-  if (myProb >= 4.0) {
-    score += 1.5;
-  } else if (myProb >= 3.0) {
-    score += (myProb - 2.0) * 0.4; // 3.0→0.4
-  }
-  if (oppProb >= 4.0) {
-    score -= 1.5;
-  } else if (oppProb >= 3.0) {
-    score -= (oppProb - 2.0) * 0.4;
-  }
-
-  // Point total: gentle ramp as we approach 11
-  if (myPtsProb >= 11.0) {
-    score += 1.2;
-  } else if (myPtsProb >= 8.0) {
-    score += (myPtsProb - 8.0) * 0.15; // 8→0, 9→0.15, 10→0.3
-  }
-  if (oppPtsProb >= 11.0) {
-    score -= 1.2;
-  } else if (oppPtsProb >= 8.0) {
-    score -= (oppPtsProb - 8.0) * 0.15;
-  }
-
+  let score: f64 = f64((myScore - oppScore) * 100);
+  if (myScore >= 11) score += 10000.0;
+  if (oppScore >= 11) score -= 10000.0;
+  if (myMarkers >= 4 && oppScore < 11) score += 8000.0;
+  if (oppMarkers >= 4 && myScore < 11) score -= 8000.0;
   return score;
 }
 
 // Evaluate position with hand-reachability adjustment.
-// Accounts for whether we still hold cards to reinforce contested geishas.
+// Reward hands that can still flip a contested lane, and mildly reward hands
+// that can reinforce lanes we already lead.
 function evaluatePositionWithReachability(myPlaced: Int8Array, oppPlaced: Int8Array, board: Int8Array, myHand: Int8Array): f64 {
   let score = evaluatePosition(myPlaced, oppPlaced, board);
   for (let i = 0; i < 7; i++) {
     const pts: f64 = f64(cardScore(i));
     const my: i32 = i32(myPlaced[i]);
     const opp: i32 = i32(oppPlaced[i]);
-    const total: i32 = totalCardsForGeisha(i);
-    let rem: i32 = total - my - opp;
-    if (rem < 0) rem = 0;
-    if (rem == 0) continue; // outcome locked, no adjustment
-    const margin: i32 = my - opp;
     const myCards: i32 = i32(myHand[i]);
-    const bv: i32 = i32(board[i]);
+    if (myCards <= 0) continue;
 
-    if (myCards == 0) {
-      // Can't contribute more — penalize if outcome is still contested
-      if (margin <= 0 && bv <= 0) {
-        score -= pts * 0.12; // behind/tied with no cards to catch up
-      } else if (margin > 0 && margin <= rem) {
-        score -= pts * 0.06; // ahead but can't defend the lead
-      }
-    } else if (margin <= 0 && bv <= 0) {
-      // Behind but we have cards to catch up — slight boost
-      score += f64(myCards) * pts * 0.04;
-    }
+    const myPotential: i32 = my + myCards;
+    if (myPotential > opp && my <= opp) score += pts * 30.0;
+    else if (my > opp) score += pts * 5.0;
   }
   return score;
 }
@@ -617,52 +517,7 @@ function scoreAction(action: string, roundCounts: Int8Array, board: Int8Array, h
   }
 
   if (type == '2') {
-    // Discard: position unchanged, but we lose future potential from these cards.
-    // Dynamic penalty: duplicate discount, locked-lane awareness, tightness scaling.
-    let penalty: f64 = 0.0;
-    for (let k = 1; k < action.length; k++) {
-      const idx = cardIndex(action.charAt(k));
-      const pts: f64 = f64(cardScore(idx));
-      const my: i32 = i32(baseMy[idx]);
-      const opp: i32 = i32(baseOpp[idx]);
-      const total: i32 = totalCardsForGeisha(idx);
-      let rem: i32 = total - my - opp;
-      if (rem < 0) rem = 0;
-      const margin: i32 = my - opp;
-      const bv: i32 = i32(board[idx]);
-
-      // Base penalty by situation
-      let basePen: f64 = 0.0;
-      if (margin > rem) {
-        // Locked win — free to discard
-      } else if (-margin > rem) {
-        // Locked loss — discarding a lost cause is cheap
-        basePen = pts * 0.04;
-      } else if (margin <= 0 && bv <= 0) {
-        basePen = pts * 0.25;
-      } else if (margin <= 0 && bv > 0) {
-        basePen = pts * 0.15;
-      } else if (margin > 0 && margin <= rem) {
-        basePen = pts * 0.12;
-      }
-
-      // Duplicate discount: still have cards for this lane after discard
-      if (remainingHand[idx] > 0 && basePen > 0.0) {
-        const dupFactor: f64 = i32(remainingHand[idx]) >= 2 ? 0.4 : 0.65;
-        basePen *= dupFactor;
-      }
-
-      // Tightness scaling: tight race (small |margin|) keeps full penalty;
-      // larger gap reduces urgency slightly
-      if (rem > 0 && basePen > 0.0) {
-        const absMargin: i32 = margin >= 0 ? margin : -margin;
-        const tightness: f64 = 1.0 - f64(absMargin) * 0.12;
-        basePen *= tightness > 0.55 ? tightness : 0.55;
-      }
-
-      penalty += basePen;
-    }
-    return evaluatePositionWithReachability(baseMy, baseOpp, board, remainingHand) - penalty;
+    return evaluatePositionWithReachability(baseMy, baseOpp, board, remainingHand);
   }
 
   if (type == '3') {
@@ -713,32 +568,15 @@ export function hanamikoji_action(history: string, cards: string, board: Int8Arr
   const isP1: bool = (n % 2) == 0;
   const roundCounts = extractRoundCardCounts(history, isP1);
 
-  // Compute geisha importance based on board state, current margins, and round counts
-  const importance = computeGeishaImportance(board, hand, roundCounts);
-
-  // Factor in opponent info: boost importance for contested geisha
-  const oppPublic = getOpponentPublicCards(history, isP1);
-  const oppRemaining = estimateOpponentRemaining(hand, oppPublic);
-  for (let i = 0; i < 7; i++) {
-    // If opponent might still contest a neutral geisha, it's more important
-    if (board[i] == 0 && oppRemaining[i] > 0 && hand[i] > 0) {
-      importance[i] += f64(cardScore(i)) * 0.3;
-    }
-    // If we can decisively win a geisha (we have more remaining), boost it
-    if (board[i] == 0 && hand[i] > i8(oppRemaining[i])) {
-      importance[i] += f64(cardScore(i)) * 0.2;
-    }
-  }
-
   // --- Response turn: respondGift/respondCompete → evaluatePositionWithReachability ---
   if (isResponseTurn(history)) {
     const last = tokens[tokens.length - 1];
     if (last.charAt(0) == '3') {
-      return respondGift(last.substring(1), roundCounts, board, importance, hand);
+      return respondGift(last.substring(1), roundCounts, board, hand);
     } else {
       const group1 = last.substring(1, 3);
       const group2 = last.substring(3, 5);
-      return respondCompete(group1, group2, roundCounts, board, importance, hand);
+      return respondCompete(group1, group2, roundCounts, board, hand);
     }
   }
 
@@ -748,14 +586,11 @@ export function hanamikoji_action(history: string, cards: string, board: Int8Arr
   const legalActions = enumerateLegalActions(hand, mask);
   let bestAction = "";
   let bestScore: f64 = -999999.0;
-  let bestTie: f64 = -999999.0;
   for (let i = 0; i < legalActions.length; i++) {
     const action = legalActions[i];
     const score = scoreAction(action, roundCounts, board, hand);
-    const tie = importanceTieBreak(action, importance);
-    if (score > bestScore || (score == bestScore && tie > bestTie)) {
+    if (score > bestScore) {
       bestScore = score;
-      bestTie = tie;
       bestAction = action;
     }
   }
