@@ -5,5 +5,8 @@
   "type": "module",
   "scripts": {
     "submit-test": "node test.js"
+  },
+  "dependencies": {
+    "@assemblyscript/loader": "^0.28.13"
   }
 }
